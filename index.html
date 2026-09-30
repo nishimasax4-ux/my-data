@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="GitHub送信">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f5f7">
+<title>GitHubアップローダー</title>
+<style>
+/* Layout: 1カラムの作業画面。上から 接続設定 → ファイル選択 → 送信先 → 送信ボタン(下部固定) */
+:root{
+  --bg:#f3f4f6;
+  --surface:#ffffff;
+  --fg:#1b2230;
+  --muted:#5f6b7d;
+  --line:#dde1e8;
+  --accent:#1f5fd1;
+  --accent-fg:#ffffff;
+  --ok:#137a45;
+  --warn:#a15c00;
+  --err:#b42318;
+  --font:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f141c;--surface:#171e29;--fg:#e8ecf3;--muted:#98a3b5;--line:#2a3443;
+    --accent:#6b9cff;--accent-fg:#0b1220;--ok:#4cc38a;--warn:#e6a23c;--err:#ff7b72;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f141c;--surface:#171e29;--fg:#e8ecf3;--muted:#98a3b5;--line:#2a3443;
+  --accent:#6b9cff;--accent-fg:#0b1220;--ok:#4cc38a;--warn:#e6a23c;--err:#ff7b72;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);
+  font-size:16px;line-height:1.6;
+  padding-inline:16px;
+  padding-top:max(16px,env(safe-area-inset-top,0px));
+  padding-bottom:calc(120px + env(safe-area-inset-bottom,0px));
+}
+main{max-width:560px;margin-inline:auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.25rem;line-height:1.3;margin:4px 0 0;text-wrap:balance}
+.lead{margin:0;color:var(--muted);font-size:.9rem}
+section,details{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+h2{font-size:.78rem;letter-spacing:.08em;color:var(--muted);margin:0 0 12px;font-weight:600}
+summary{font-size:.78rem;letter-spacing:.08em;color:var(--muted);font-weight:600;cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"開く";font-weight:400;letter-spacing:0}
+details[open] summary::after{content:"閉じる"}
+details[open] summary{margin-bottom:12px}
+.status-chip{font-weight:400;letter-spacing:0;font-size:.8rem}
+label{display:block;font-size:.85rem;font-weight:600;margin:12px 0 4px}
+label:first-of-type{margin-top:0}
+input[type=text],input[type=password]{
+  width:100%;font:inherit;font-size:16px;color:var(--fg);background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0;
+}
+input[type=text]:focus,input[type=password]:focus,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hint{margin:4px 0 0;font-size:.8rem;color:var(--muted)}
+.check{display:flex;gap:10px;align-items:flex-start;margin-top:12px;font-size:.9rem;font-weight:400}
+.check input{width:20px;height:20px;margin:2px 0 0;flex:none;accent-color:var(--accent)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:360px){.row{grid-template-columns:1fr}}
+button{font:inherit;font-size:16px;border-radius:10px;padding:12px 14px;border:1px solid var(--line);background:var(--surface);color:var(--fg);cursor:pointer;min-height:48px}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.summary-box{margin-top:12px;font-size:.9rem}
+.summary-box b{font-variant-numeric:tabular-nums}
+.filelist{margin:8px 0 0;padding:0;list-style:none;font-family:var(--mono);font-size:.78rem;max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.filelist li{padding:5px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.filelist li:last-child{border-bottom:0}
+.filelist span:first-child{overflow-wrap:anywhere;min-width:0}
+.filelist span:last-child{color:var(--muted);flex:none;font-variant-numeric:tabular-nums}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px))}
+.bar-inner{max-width:560px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.progress i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.msg{font-size:.85rem;margin:0;min-height:1.4em;overflow-wrap:anywhere}
+.msg.ok{color:var(--ok)}
+.msg.err{color:var(--err)}
+.msg.warn{color:var(--warn)}
+.msg a{color:inherit}
+@media (prefers-reduced-motion:reduce){.progress i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>GitHubアップローダー</h1>
+    <p class="lead">ZIPまたは複数ファイルを選んで、リポジトリに1回のコミットでまとめて保存します。</p>
+  </header>
+
+  <details id="settings">
+    <summary><span>接続設定</span><span id="settingsChip" class="status-chip"></span></summary>
+    <label for="token">アクセストークン</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_...">
+    <p class="hint">対象リポジトリだけに絞った Fine-grained token を作り、権限は Contents の Read and write にします。</p>
+    <label for="repo">リポジトリ</label>
+    <input id="repo" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ユーザー名/リポジトリ名">
+    <label for="branch">ブランチ</label>
+    <input id="branch" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="空欄ならリポジトリの既定ブランチ">
+    <label class="check" for="remember"><input id="remember" type="checkbox" checked><span>この端末にトークンを保存する（外部には送信しません）</span></label>
+  </details>
+
+  <section>
+    <h2>アップロードするファイル</h2>
+    <div class="row">
+      <button type="button" id="pickZip">ZIPを選ぶ</button>
+      <button type="button" id="pickFiles">ファイルを選ぶ</button>
+    </div>
+    <input id="zipInput" type="file" accept=".zip,application/zip" hidden>
+    <input id="filesInput" type="file" multiple hidden>
+    <label class="check" id="stripWrap" for="strip" hidden><input id="strip" type="checkbox" checked><span>ZIPの最上位フォルダ名を外す</span></label>
+    <div class="summary-box" id="summary"></div>
+    <ul class="filelist" id="filelist" hidden></ul>
+  </section>
+
+  <section>
+    <h2>保存先</h2>
+    <label for="dest">フォルダ（リポジトリ内のパス）</label>
+    <input id="dest" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="空欄ならリポジトリ直下">
+    <p class="hint">例: docs/manual。同じ名前のファイルは上書きされます。</p>
+    <label for="message">コミットメッセージ</label>
+    <input id="message" type="text" value="iPhoneからアップロード">
+  </section>
+</main>
+
+<div class="bar">
+  <div class="bar-inner">
+    <div class="progress" aria-hidden="true"><i id="progressFill"></i></div>
+    <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    <button type="button" class="primary" id="upload" disabled>アップロード</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var store = {
+    get: function(k){ try { return localStorage.getItem(k) || ''; } catch(e){ return ''; } },
+    set: function(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
+    del: function(k){ try { localStorage.removeItem(k); } catch(e){} }
+  };
+
+  // ホーム画面用アイコンを描画して差し込む
+  try {
+    var c = document.createElement('canvas'); c.width = c.height = 180;
+    var g = c.getContext('2d');
+    g.fillStyle = '#1f5fd1'; g.fillRect(0,0,180,180);
+    g.fillStyle = '#ffffff';
+    g.beginPath(); g.moveTo(90,38); g.lineTo(134,88); g.lineTo(104,88); g.lineTo(104,132); g.lineTo(76,132); g.lineTo(76,88); g.lineTo(46,88); g.closePath(); g.fill();
+    g.fillRect(46,146,88,10);
+    var l = document.createElement('link'); l.rel = 'apple-touch-icon'; l.href = c.toDataURL('image/png');
+    document.head.appendChild(l);
+  } catch(e){}
+
+  // 保存済みの設定を復元
+  $('token').value = store.get('ghu.token');
+  $('repo').value = store.get('ghu.repo');
+  $('branch').value = store.get('ghu.branch');
+  $('dest').value = store.get('ghu.dest');
+  if (store.get('ghu.remember') === '0') $('remember').checked = false;
+
+  var items = [];      // {rawPath, size, read: ()=>Promise<base64>}
+  var zipHasRoot = false;
+  var busy = false;
+
+  function fmtSize(n){
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/1024/1024).toFixed(1) + ' MB';
+  }
+  function setMsg(text, cls, html){
+    var m = $('msg');
+    m.className = 'msg' + (cls ? ' ' + cls : '');
+    if (html) m.innerHTML = text; else m.textContent = text;
+  }
+  function setProgress(p){ $('progressFill').style.width = Math.round(p*100) + '%'; }
+
+  function updateSettingsChip(){
+    var ok = $('token').value.trim() && /^[^\/\s]+\/[^\/\s]+$/.test($('repo').value.trim());
+    $('settingsChip').textContent = ok ? '設定済み' : '未設定';
+    $('settingsChip').style.color = ok ? 'var(--ok)' : 'var(--warn)';
+    if (!ok) $('settings').open = true;
+  }
+  function updateUploadButton(){
+    var ok = $('token').value.trim() && /^[^\/\s]+\/[^\/\s]+$/.test($('repo').value.trim()) && items.length > 0 && !busy;
+    $('upload').disabled = !ok;
+  }
+  ['token','repo','branch'].forEach(function(id){
+    $(id).addEventListener('input', function(){ updateSettingsChip(); updateUploadButton(); });
+  });
+  updateSettingsChip();
+
+  function cleanPath(p){
+    return p.replace(/\\/g,'/').split('/').filter(function(s){ return s && s !== '.' && s !== '..'; }).join('/');
+  }
+  function isJunk(path){
+    var parts = path.split('/');
+    var name = parts[parts.length-1];
+    return parts[0] === '__MACOSX' || name === '.DS_Store' || name === 'Thumbs.db' || name.indexOf('._') === 0;
+  }
+
+  function effectivePath(item){
+    var p = item.rawPath;
+    if (zipHasRoot && $('strip').checked) p = p.split('/').slice(1).join('/');
+    var dest = cleanPath($('dest').value);
+    return dest ? dest + '/' + p : p;
+  }
+  function currentEntries(){
+    return items.map(function(it){ return { path: effectivePath(it), item: it }; }).filter(function(e){ return e.path; });
+  }
+
+  function renderList(){
+    var entries = currentEntries();
+    var total = entries.reduce(function(s,e){ return s + e.item.size; }, 0);
+    var list = $('filelist');
+    list.innerHTML = '';
+    if (!entries.length){
+      $('summary').textContent = '';
+      list.hidden = true;
+      return;
+    }
+    $('summary').innerHTML = '<b>' + entries.length + '</b> 個のファイル（合計 <b>' + fmtSize(total) + '</b>）';
+    var shown = entries.slice(0, 60);
+    shown.forEach(function(e){
+      var li = document.createElement('li');
+      var a = document.createElement('span'); a.textContent = e.path;
+      var b = document.createElement('span'); b.textContent = fmtSize(e.item.size);
+      li.appendChild(a); li.appendChild(b); list.appendChild(li);
+    });
+    if (entries.length > shown.length){
+      var more = document.createElement('li');
+      var t = document.createElement('span'); t.textContent = '…ほか ' + (entries.length - shown.length) + ' 個';
+      more.appendChild(t); list.appendChild(more);
+    }
+    list.hidden = false;
+  }
+  $('strip').addEventListener('change', renderList);
+  $('dest').addEventListener('input', renderList);
+
+  function bufToBase64(buf){
+    var bytes = new Uint8Array(buf), chunk = 0x8000, s = '';
+    for (var i = 0; i < bytes.length; i += chunk){
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(s);
+  }
+
+  $('pickZip').addEventListener('click', function(){ $('zipInput').value = ''; $('zipInput').click(); });
+  $('pickFiles').addEventListener('click', function(){ $('filesInput').value = ''; $('filesInput').click(); });
+
+  $('zipInput').addEventListener('change', async function(ev){
+    var f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    if (typeof JSZip === 'undefined'){ setMsg('ZIP読み込み用のライブラリを取得できませんでした。通信状態を確認して開き直してください。', 'err'); return; }
+    setMsg('ZIPを読み込んでいます…');
+    try {
+      var zip = await JSZip.loadAsync(f);
+      var list = [];
+      zip.forEach(function(rel, entry){
+        if (entry.dir) return;
+        var p = cleanPath(rel);
+        if (!p || isJunk(p)) return;
+        list.push({
+          rawPath: p,
+          size: (entry._data && entry._data.uncompressedSize) || 0,
+          read: function(){ return entry.async('base64'); }
+        });
+      });
+      items = list;
+      zipHasRoot = list.length > 0 && list.every(function(it){ return it.rawPath.indexOf('/') > 0; }) &&
+        list.every(function(it){ return it.rawPath.split('/')[0] === list[0].rawPath.split('/')[0]; });
+      $('stripWrap').hidden = !zipHasRoot;
+      renderList();
+      setMsg(list.length ? '' : 'ZIPの中にファイルが見つかりませんでした。', list.length ? '' : 'warn');
+    } catch(e){
+      items = []; renderList();
+      setMsg('ZIPを読み込めませんでした: ' + e.message, 'err');
+    }
+    updateUploadButton();
+  });
+
+  $('filesInput').addEventListener('change', function(ev){
+    var files = Array.prototype.slice.call(ev.target.files || []);
+    if (!files.length) return;
+    zipHasRoot = false;
+    $('stripWrap').hidden = true;
+    items = files.map(function(f){
+      var name = cleanPath(f.webkitRelativePath || f.name);
+      return { rawPath: name, size: f.size, read: function(){ return f.arrayBuffer().then(bufToBase64); } };
+    }).filter(function(it){ return it.rawPath && !isJunk(it.rawPath); });
+    renderList();
+    setMsg('');
+    updateUploadButton();
+  });
+
+  function explain(err, ctx){
+    var s = err.status;
+    if (s === 401) return 'トークンが正しくないか、期限が切れています。接続設定を確認してください。';
+    if (s === 403) return 'この操作は許可されていません。トークンに Contents の Read and write 権限があるか確認してください。（' + err.message + '）';
+    if (s === 404) return ctx + 'が見つかりません。リポジトリ名、ブランチ名、トークンの対象リポジトリを確認してください。';
+    if (s === 409) return 'リポジトリが空か、他の更新と競合しました。空のリポジトリの場合は、GitHub上でREADMEを1つ作ってから試してください。';
+    if (s === 422) return 'GitHubが内容を受け付けませんでした。（' + err.message + '）';
+    if (err instanceof TypeError) return '通信に失敗しました。ネットワーク接続を確認してください。';
+    return err.message || '不明なエラーです。';
+  }
+
+  async function run(){
+    if (busy) return;
+    var token = $('token').value.trim();
+    var repo = $('repo').value.trim();
+    var branch = $('branch').value.trim();
+    var message = $('message').value.trim() || 'iPhoneからアップロード';
+    var entries = currentEntries();
+    if (!entries.length) return;
+
+    // 設定の保存
+    if ($('remember').checked){ store.set('ghu.token', token); store.set('ghu.remember','1'); }
+    else { store.del('ghu.token'); store.set('ghu.remember','0'); }
+    store.set('ghu.repo', repo); store.set('ghu.branch', branch); store.set('ghu.dest', $('dest').value.trim());
+
+    busy = true; updateUploadButton();
+    $('upload').textContent = 'アップロード中…';
+    setProgress(0);
+
+    function api(method, url, body){
+      return fetch('https://api.github.com' + url, {
+        method: method,
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': 'Bearer ' + token,
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json'
+        },
+        body: body ? JSON.stringify(body) : undefined
+      }).then(function(r){
+        return r.text().then(function(t){
+          var j = null; try { j = JSON.parse(t); } catch(e){}
+          if (!r.ok){
+            var err = new Error((j && j.message) || r.statusText);
+            err.status = r.status;
+            throw err;
+          }
+          return j;
+        });
+      });
+    }
+
+    var stage = 'リポジトリ';
+    try {
+      setMsg('リポジトリを確認しています…');
+      if (!branch){
+        var info = await api('GET', '/repos/' + repo);
+        branch = info.default_branch;
+      }
+      stage = 'ブランチ';
+      var ref = await api('GET', '/repos/' + repo + '/git/ref/heads/' + encodeURIComponent(branch).replace(/%2F/g,'/'));
+      var parentSha = ref.object.sha;
+      var parent = await api('GET', '/repos/' + repo + '/git/commits/' + parentSha);
+
+      // ファイルをblobとして送信（4並列）
+      stage = 'ファイル';
+      var done = 0, total = entries.length, treeItems = new Array(total), next = 0;
+      async function worker(){
+        while (true){
+          var i = next++;
+          if (i >= total) return;
+          var e = entries[i];
+          var b64 = await e.item.read();
+          var blob = await api('POST', '/repos/' + repo + '/git/blobs', { content: b64, encoding: 'base64' });
+          treeItems[i] = { path: e.path, mode: '100644', type: 'blob', sha: blob.sha };
+          done++;
+          setProgress(done / total * 0.9);
+          setMsg('送信中 ' + done + ' / ' + total);
+        }
+      }
+      var workers = [];
+      for (var w = 0; w < Math.min(4, total); w++) workers.push(worker());
+      await Promise.all(workers);
+
+      stage = 'コミット';
+      setMsg('コミットを作成しています…');
+      var tree = await api('POST', '/repos/' + repo + '/git/trees', { base_tree: parent.tree.sha, tree: treeItems });
+      var commit = await api('POST', '/repos/' + repo + '/git/commits', { message: message, tree: tree.sha, parents: [parentSha] });
+      await api('PATCH', '/repos/' + repo + '/git/refs/heads/' + encodeURIComponent(branch).replace(/%2F/g,'/'), { sha: commit.sha, force: false });
+
+      setProgress(1);
+      var url = 'https://github.com/' + repo + '/commit/' + commit.sha;
+      setMsg(total + ' 個のファイルを ' + branch + ' に保存しました。<a href="' + url + '" target="_blank" rel="noopener">コミットを見る</a>', 'ok', true);
+    } catch(err){
+      setProgress(0);
+      setMsg(explain(err, stage), 'err');
+    } finally {
+      busy = false;
+      $('upload').textContent = 'アップロード';
+      updateUploadButton();
+    }
+  }
+  $('upload').addEventListener('click', run);
+  updateUploadButton();
+})();
+</script>
+</body>
+</html>
