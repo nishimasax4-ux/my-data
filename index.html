@@ -65,6 +65,12 @@ input[type=text],input[type=password]{
   border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0;
 }
 input[type=text]:focus,input[type=password]:focus,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+select{width:100%;font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0;min-height:48px}
+select:focus{outline:2px solid var(--accent);outline-offset:2px}
+button.wide{width:100%;margin-top:10px}
+.row-select{display:flex;gap:8px;align-items:stretch}
+.row-select select{flex:1}
+.row-select button{flex:none;padding:10px 12px;font-size:.85rem}
 .hint{margin:4px 0 0;font-size:.8rem;color:var(--muted)}
 .check{display:flex;gap:10px;align-items:flex-start;margin-top:12px;font-size:.9rem;font-weight:400}
 .check input{width:20px;height:20px;margin:2px 0 0;flex:none;accent-color:var(--accent)}
@@ -101,10 +107,24 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
   <details id="settings">
     <summary><span>接続設定</span><span id="settingsChip" class="status-chip"></span></summary>
+    <label for="tokenSelect">保存済みのトークン</label>
+    <div class="row-select">
+      <select id="tokenSelect"></select>
+      <button type="button" id="delToken">削除</button>
+    </div>
+    <label for="tokenName">名前（自分で分かる名前）</label>
+    <input id="tokenName" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="例: kondate用">
     <label for="token">アクセストークン</label>
     <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_...">
-    <p class="hint">対象リポジトリだけに絞った Fine-grained token を作り、権限は Contents の Read and write にします。</p>
-    <label for="repo">リポジトリ</label>
+    <button type="button" id="saveToken" class="wide">このトークンを保存</button>
+    <p class="hint" id="tokenHint">対象リポジトリだけに絞った Fine-grained token を作り、権限は Contents の Read and write にします。名前を変えて保存すると、トークンを複数登録できます。</p>
+    <label for="repoSelect">リポジトリ</label>
+    <div class="row-select">
+      <select id="repoSelect"><option value="">トークンを入れると一覧が出ます</option></select>
+      <button type="button" id="loadRepos">一覧を更新</button>
+    </div>
+    <p class="hint" id="repoHint">書き込める自分のリポジトリだけを表示します。</p>
+    <label for="repo">リポジトリ名（一覧にないときは直接入力）</label>
     <input id="repo" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ユーザー名/リポジトリ名">
     <label for="branch">ブランチ</label>
     <input id="branch" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="空欄ならリポジトリの既定ブランチ">
@@ -165,8 +185,46 @@ button:disabled{opacity:.5;cursor:not-allowed}
   } catch(e){}
 
   // 保存済みの設定を復元
-  $('token').value = store.get('ghu.token');
-  $('repo').value = store.get('ghu.repo');
+  // 複数トークンの保存と切り替え
+  var tokens = [];
+  try { tokens = JSON.parse(store.get('ghu.tokens') || '[]'); } catch(e){ tokens = []; }
+  if (!Array.isArray(tokens)) tokens = [];
+  var legacyToken = store.get('ghu.token');
+  if (legacyToken && !tokens.length){
+    tokens.push({ name: '標準', token: legacyToken, repo: store.get('ghu.repo') });
+    store.set('ghu.tokens', JSON.stringify(tokens));
+  }
+  function persistTokens(){ store.set('ghu.tokens', JSON.stringify(tokens)); }
+  function setTokenHint(t, cls){ var h = $('tokenHint'); h.textContent = t; h.style.color = cls ? 'var(--' + cls + ')' : ''; }
+  function renderTokenSelect(selName){
+    var sel = $('tokenSelect');
+    sel.innerHTML = '';
+    var o0 = document.createElement('option');
+    o0.value = ''; o0.textContent = '（新しく追加）';
+    sel.appendChild(o0);
+    var idx = 0;
+    tokens.forEach(function(t, i){
+      var o = document.createElement('option');
+      o.value = String(i); o.textContent = t.name;
+      sel.appendChild(o);
+      if (selName != null && t.name === selName) idx = i + 1;
+    });
+    sel.selectedIndex = idx;
+  }
+  function applyTokenSelection(){
+    var v = $('tokenSelect').value;
+    if (v === '' || !tokens[+v]){ $('tokenName').value = ''; $('token').value = ''; return; }
+    var t = tokens[+v];
+    $('tokenName').value = t.name;
+    $('token').value = t.token;
+    if (t.repo) $('repo').value = t.repo;
+    store.set('ghu.activeToken', t.name);
+  }
+  var activeName = store.get('ghu.activeToken');
+  if (!tokens.some(function(t){ return t.name === activeName; }) && tokens.length) activeName = tokens[0].name;
+  renderTokenSelect(activeName);
+  applyTokenSelection();
+  if (!$('repo').value) $('repo').value = store.get('ghu.repo');
   $('branch').value = store.get('ghu.branch');
   $('dest').value = store.get('ghu.dest');
   if (store.get('ghu.remember') === '0') $('remember').checked = false;
@@ -201,6 +259,116 @@ button:disabled{opacity:.5;cursor:not-allowed}
     $(id).addEventListener('input', function(){ updateSettingsChip(); updateUploadButton(); });
   });
   updateSettingsChip();
+
+  // アカウントのリポジトリ一覧を取得して選択式にする
+  var loadingRepos = false;
+  function setRepoHint(t, cls){ var h = $('repoHint'); h.textContent = t; h.style.color = cls ? 'var(--' + cls + ')' : ''; }
+  async function loadRepos(){
+    var token = $('token').value.trim();
+    if (!token){ setRepoHint('先にアクセストークンを入れてください。', 'warn'); return; }
+    if (loadingRepos) return;
+    loadingRepos = true;
+    $('loadRepos').disabled = true;
+    setRepoHint('読み込んでいます…');
+    try {
+      var all = [];
+      for (var page = 1; page <= 5; page++){
+        var r = await fetch('https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=' + page, {
+          headers: { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + token, 'X-GitHub-Api-Version': '2022-11-28' }
+        });
+        if (!r.ok){
+          var e = new Error(r.statusText); e.status = r.status; throw e;
+        }
+        var part = await r.json();
+        all = all.concat(part);
+        if (part.length < 100) break;
+      }
+      var writable = all.filter(function(x){ return x.permissions && x.permissions.push; });
+      var sel = $('repoSelect');
+      sel.innerHTML = '';
+      var first = document.createElement('option');
+      first.value = ''; first.textContent = writable.length ? 'リポジトリを選んでください' : '書き込めるリポジトリがありません';
+      sel.appendChild(first);
+      writable.forEach(function(x){
+        var o = document.createElement('option');
+        o.value = x.full_name;
+        o.textContent = x.full_name + (x.private ? '（非公開）' : '（公開）');
+        sel.appendChild(o);
+      });
+      var cur = $('repo').value.trim().toLowerCase();
+      for (var i = 0; i < sel.options.length; i++){
+        if (sel.options[i].value.toLowerCase() === cur){ sel.selectedIndex = i; break; }
+      }
+      setRepoHint(writable.length
+        ? writable.length + ' 件から選べます。'
+        : 'このトークンで書き込めるリポジトリがありません。トークンの対象リポジトリと、Contents の Read and write を確認してください。',
+        writable.length ? 'ok' : 'warn');
+    } catch(err){
+      setRepoHint(err.status === 401
+        ? 'トークンが正しくないか、期限が切れています。'
+        : err.status === 403
+          ? '一覧を取得できませんでした。トークンの権限を確認してください。'
+          : '一覧を取得できませんでした。通信状態を確認するか、下の欄に直接入力してください。', 'err');
+    } finally {
+      loadingRepos = false;
+      $('loadRepos').disabled = false;
+    }
+  }
+  $('repoSelect').addEventListener('change', function(){
+    if (!this.value) return;
+    $('repo').value = this.value;
+    $('repo').dispatchEvent(new Event('input'));
+  });
+  $('repo').addEventListener('input', function(){
+    var sel = $('repoSelect'), cur = this.value.trim().toLowerCase(), idx = 0;
+    for (var i = 1; i < sel.options.length; i++){
+      if (sel.options[i].value.toLowerCase() === cur){ idx = i; break; }
+    }
+    sel.selectedIndex = idx;
+  });
+  $('loadRepos').addEventListener('click', loadRepos);
+  $('token').addEventListener('change', function(){ if (this.value.trim()) loadRepos(); });
+  if ($('token').value.trim()) loadRepos();
+
+  $('tokenSelect').addEventListener('change', function(){
+    applyTokenSelection();
+    $('repo').dispatchEvent(new Event('input'));
+    updateSettingsChip(); updateUploadButton();
+    if ($('token').value.trim()) loadRepos();
+    else { $('repoSelect').innerHTML = '<option value="">トークンを入れると一覧が出ます</option>'; setRepoHint('書き込める自分のリポジトリだけを表示します。'); }
+  });
+  $('saveToken').addEventListener('click', function(){
+    var name = $('tokenName').value.trim(), tk = $('token').value.trim();
+    if (!$('remember').checked){ setTokenHint('「この端末にトークンを保存する」がオフです。オンにしてから保存してください。', 'warn'); return; }
+    if (!name || !tk){ setTokenHint('名前とトークンの両方を入れてください。', 'warn'); return; }
+    var entry = { name: name, token: tk, repo: $('repo').value.trim() };
+    var found = -1;
+    tokens.forEach(function(t, i){ if (t.name === name) found = i; });
+    if (found >= 0) tokens[found] = entry; else tokens.push(entry);
+    persistTokens();
+    store.set('ghu.activeToken', name);
+    renderTokenSelect(name);
+    setTokenHint('「' + name + '」を保存しました。（登録 ' + tokens.length + ' 件）', 'ok');
+  });
+  var delTimer = null;
+  $('delToken').addEventListener('click', function(){
+    var btn = this, v = $('tokenSelect').value;
+    if (v === '' || !tokens[+v]){ setTokenHint('削除するトークンを選んでください。', 'warn'); return; }
+    if (!delTimer){
+      btn.textContent = 'もう一度';
+      delTimer = setTimeout(function(){ btn.textContent = '削除'; delTimer = null; }, 3000);
+      return;
+    }
+    clearTimeout(delTimer); delTimer = null; btn.textContent = '削除';
+    var name = tokens[+v].name;
+    tokens.splice(+v, 1);
+    persistTokens();
+    renderTokenSelect();
+    applyTokenSelection();
+    $('repoSelect').innerHTML = '<option value="">トークンを入れると一覧が出ます</option>';
+    updateSettingsChip(); updateUploadButton();
+    setTokenHint('「' + name + '」を削除しました。', 'ok');
+  });
 
   function cleanPath(p){
     return p.replace(/\\/g,'/').split('/').filter(function(s){ return s && s !== '.' && s !== '..'; }).join('/');
@@ -326,8 +494,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
     if (!entries.length) return;
 
     // 設定の保存
-    if ($('remember').checked){ store.set('ghu.token', token); store.set('ghu.remember','1'); }
-    else { store.del('ghu.token'); store.set('ghu.remember','0'); }
+    store.set('ghu.remember', $('remember').checked ? '1' : '0');
+    if ($('remember').checked){
+      var sv = $('tokenSelect').value;
+      if (sv !== '' && tokens[+sv]){ tokens[+sv].repo = repo; persistTokens(); }
+    }
     store.set('ghu.repo', repo); store.set('ghu.branch', branch); store.set('ghu.dest', $('dest').value.trim());
 
     busy = true; updateUploadButton();
