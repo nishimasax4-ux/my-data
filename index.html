@@ -476,7 +476,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   function explain(err, ctx){
     var s = err.status;
     if (s === 401) return 'トークンが正しくないか、期限が切れています。接続設定を確認してください。';
-    if (s === 403) return 'この操作は許可されていません。トークンに Contents の Read and write 権限があるか確認してください。（' + err.message + '）';
+    if (s === 403) return 'この操作は許可されていません。トークンに Contents の Read and write 権限があるか確認してください。（' + err.message + (err.where ? ' / 失敗した操作: ' + err.where : '') + '）';
     if (s === 404) return ctx + 'が見つかりません。リポジトリ名、ブランチ名、トークンの対象リポジトリを確認してください。';
     if (s === 409) return 'リポジトリが空か、他の更新と競合しました。空のリポジトリの場合は、GitHub上でREADMEを1つ作ってから試してください。';
     if (s === 422) return 'GitHubが内容を受け付けませんでした。（' + err.message + '）';
@@ -521,6 +521,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
           if (!r.ok){
             var err = new Error((j && j.message) || r.statusText);
             err.status = r.status;
+            err.where = method + ' ' + url.replace(/^\/repos\/[^\/]+\/[^\/]+/, '');
             throw err;
           }
           return j;
